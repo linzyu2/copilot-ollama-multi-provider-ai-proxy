@@ -76,19 +76,26 @@ internal static class OllamaEndpoints
                     string providerPrefix = x.Provider.ToUpperInvariant();
                     string displayName = $"{providerPrefix} - {x.DisplayModel}";
                     string routedModel = x.Model;
+                    // Determine if the model already has a tag suffix (e.g. ":free").
+                    // If so, omit the redundant ":latest" suffix to avoid ":free:latest".
+                    static bool HasTag(string id) => id.Contains(':');
                     // Use a provider-qualified alias so that when the client sends this back
                     // as the model name, the proxy routes it uniquely to the correct provider
                     // instead of falling back to the default (e.g. DeepSeek).
-                    string qualifiedModel = $"{routedModel}@{x.Provider}:latest";
+                    string qualifiedModel = HasTag(routedModel)
+                        ? $"{routedModel}@{x.Provider}"
+                        : $"{routedModel}@{x.Provider}:latest";
 
                     (int ContextLength, int MaxOutputTokens, bool SupportsTools, bool SupportsVision, string[] Capabilities, string Family) p = modelCatalog.GetModelProfile(routedModel);
                     return new
                     {
-                        name = displayName + ":latest",
-                        // Expose the model name without provider qualifier so clients that
-                        // don't expect the @provider form will match easily.
-                        model = routedModel + ":latest",
-                        // Keep the provider-qualified alias in case clients need it for routing.
+                        name = displayName,
+                        // Return the provider-qualified alias in the primary model field so
+                        // Ollama/BYOM clients can round-trip the selected value without
+                        // falling back to the default provider.
+                        model = qualifiedModel,
+                        // Keep both bare and qualified aliases for compatibility with clients
+                        // that still expect or persist the upstream model name.
                         aliases = new[] { routedModel, qualifiedModel },
                         modified_at = DateTime.UtcNow.ToString("o"),
                         size = 3_826_793_677L,
@@ -177,6 +184,8 @@ internal static class OllamaEndpoints
             string ollamaUpstreamModel = providerRegistry.ResolveUpstreamModel(ollamaEffectiveModel);
             ProviderInfo ollamaProvider = providerRegistry.ResolveProvider(ollamaEffectiveModel);
             ModelExecutionConfig ollamaExec = modelCatalog.GetExecutionConfigForModel(ollamaEffectiveModel);
+
+            Console.WriteLine($"[Ollama] ← Received model: \"{ollamaRequestedModel}\" → Resolved: \"{ollamaEffectiveModel}\" → Forward to: \"{ollamaProvider.Name}\" (upstream: \"{ollamaUpstreamModel}\")");
 
             // ── Diagnostic headers ───────────────────────────────────────
             ctx.Response.Headers["X-Proxy-Requested-Model"] = ollamaRequestedModel;

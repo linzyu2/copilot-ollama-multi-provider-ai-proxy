@@ -7,7 +7,7 @@ internal sealed class ProviderRegistry
 
     public ProviderRegistry(ProviderHttpClientFactory httpClientFactory)
     {
-        DefaultModel = Environment.GetEnvironmentVariable("DEEPSEEK_MODEL") ?? "deepseek-v4-pro";
+        DefaultModel = Environment.GetEnvironmentVariable("DEEPSEEK_MODEL") ?? "deepseek-v4-flash";
         DiscoverProviders(httpClientFactory);
 
         if (_providers.Count == 0)
@@ -81,8 +81,12 @@ internal sealed class ProviderRegistry
     {
         if (_providers.Count == 0)
             throw new InvalidOperationException("ProviderRegistry: no providers are registered (check PROVIDER_*_API_KEY env vars).");
-        if (!string.IsNullOrWhiteSpace(requestedModel) && _modelToProvider.TryGetValue(requestedModel, out ProviderInfo provider))
-            return provider;
+        if (!string.IsNullOrWhiteSpace(requestedModel))
+        {
+            string cleanModel = NormalizeRequestedModel(requestedModel);
+            if (_modelToProvider.TryGetValue(cleanModel, out ProviderInfo provider))
+                return provider;
+        }
         return _providers[0];
     }
 
@@ -93,56 +97,116 @@ internal sealed class ProviderRegistry
 
         if (!string.IsNullOrWhiteSpace(requestedModel))
         {
-            // Strip Ollama-style tag suffix (e.g., "deepseek-v4-pro:latest" → "deepseek-v4-pro")
-            string cleanModel = StripTagSuffix(requestedModel);
+            string cleanModel = NormalizeRequestedModel(requestedModel);
             if (_modelToProvider.ContainsKey(cleanModel))
                 return cleanModel;
 
             // Accept the OpenAI-style "provider/model" form (e.g. "groq/llama-3.3-70b-versatile"
-            // or "nvidia/qwen3.5-397b-a17b"). Some providers (NVIDIA in particular) expose
-            // upstream ids with a slash prefix ("qwen/qwen3.5-397b-a17b"), so first try the
-            // full id verbatim, then fall back to stripping the provider prefix, and finally
-            // try matching the requested bare against any upstream id owned by the hinted
-            // provider that ends with that bare.
-            int slash = cleanModel.IndexOf('/');
-            if (slash > 0 && slash < cleanModel.Length - 1)
-            {
-                if (_modelToProvider.ContainsKey(cleanModel))
-                    return cleanModel;
-
-                string bare = cleanModel[(slash + 1)..];
-                if (_modelToProvider.ContainsKey(bare))
-                    return bare;
-
-                // Last-resort match: look for any upstream id in the hinted provider
-                // whose suffix equals the requested bare (e.g. requested bare
-                // "qwen3.5-397b-a17b" matches upstream "qwen/qwen3.5-397b-a17b").
-                string? providerHint = cleanModel[..slash];
-                if (_modelToProvider.TryGetValue(bare, out _))
+                // or "nvidia/qwen3.5-397b-a17b"). Some providers (NVIDIA in particular) expose
+                // upstream ids with a slash prefix ("qwen/qwen3.5-397b-a17b"), so first try the
+                // full id verbatim, then fall back to stripping the provider prefix, and finally
+                // try matching the requested bare against any upstream id owned by the hinted
+                // provider that ends with that bare.
+                int slash = cleanModel.IndexOf('/');
+                if (slash > 0 && slash < cleanModel.Length - 1)
                 {
-                    return bare; // unreachable, but keeps the flow explicit
+                    if (_modelToProvider.ContainsKey(cleanModel))
+                        return cleanModel;
+
+                    string bare = cleanModel[(slash + 1)..];
+                    if (_modelToProvider.ContainsKey(bare))
+                        return bare;
+
+                    // Last-resort match: look for any upstream id in the hinted provider
+                    // whose suffix equals the requested bare (e.g. requested bare
+                    // "qwen3.5-397b-a17b" matches upstream "qwen/qwen3.5-397b-a17b").
+                    string? providerHint = cleanModel[..slash];
+                    if (_modelToProvider.TryGetValue(bare, out _))
+                    {
+                        return bare; // unreachable, but keeps the flow explicit
+                    }
+
+                    foreach (KeyValuePair<string, ProviderInfo> kv in _modelToProvider)
+                    {
+                        if (!string.Equals(kv.Value.Name, providerHint, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        int lastSlash = kv.Key.LastIndexOf('/');
+                        string suffix = lastSlash > 0 ? kv.Key[(lastSlash + 1)..] : kv.Key;
+                        if (string.Equals(suffix, bare, StringComparison.OrdinalIgnoreCase))
+                            return kv.Key;
+                    }
                 }
 
-                foreach (KeyValuePair<string, ProviderInfo> kv in _modelToProvider)
+                // Handle the "model@provider" qualified form generated by NormalizeRequestedModel.
+                // When "OPENROUTER - nemotron-3-ultra-550b-a55b:latest" is normalised to
+                // "nemotron-3-ultra-550b-a55b@OPENROUTER" but the catalog only has
+                // "nvidia/nemotron-3-ultra-550b-a55b@openrouter", search by provider + suffix.
+                int atSign = cleanModel.IndexOf('@');
+                if (atSign > 0 && atSign < cleanModel.Length - 1)
                 {
-                    if (!string.Equals(kv.Value.Name, providerHint, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    int lastSlash = kv.Key.LastIndexOf('/');
-                    string suffix = lastSlash > 0 ? kv.Key[(lastSlash + 1)..] : kv.Key;
-                    if (string.Equals(suffix, bare, StringComparison.OrdinalIgnoreCase))
-                        return kv.Key;
+                    string bareModel = cleanModel[..atSign];
+                    string providerHint = cleanModel[(atSign + 1)..];
+
+                    foreach (KeyValuePair<string, ProviderInfo> kv in _modelToProvider)
+                    {
+                        if (!string.Equals(kv.Value.Name, providerHint, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        // Strip "@provider" suffix from the key to get the upstream model id.
+                        int keyAt = kv.Key.IndexOf('@');
+                        string upstreamId = keyAt > 0 ? kv.Key[..keyAt] : kv.Key;
+
+                        // Match when the upstream id ends with the bare model (e.g.
+                        // "nvidia/nemotron-3-ultra-550b-a55b" ends with "nemotron-3-ultra-550b-a55b").
+                        if (upstreamId.EndsWith(bareModel, StringComparison.OrdinalIgnoreCase))
+                            return kv.Key;
+                    }
                 }
-            }
         }
 
         return DefaultModel;
     }
 
-    /// <summary>Removes the tag portion of an Ollama model name (e.g. "model:latest" → "model").</summary>
+    /// <summary>Removes only the ephemeral ":latest" tag from an Ollama model name.</summary>
+    /// <remarks>Does NOT strip other colons (e.g. ":free") which are semantically
+    /// significant for providers like OpenRouter (pricing tier) or Ollama (quantization).</remarks>
     private static string StripTagSuffix(string model)
     {
-        int colonIdx = model.IndexOf(':');
-        return colonIdx > 0 ? model[..colonIdx] : model;
+        if (model.EndsWith(":latest", StringComparison.OrdinalIgnoreCase))
+            return model[..^7];
+        return model;
+    }
+
+    /// <summary>
+    /// Normalizes model identifiers sent back by Ollama/BYOM clients.
+    /// Accepts provider-qualified values (model@provider:latest), bare values
+    /// (model:latest), and display labels such as "OPENROUTER - model:latest".
+    /// When a display prefix matches a known provider name, the output is
+    /// reconstructed as "model@provider" so routing preserves the intended
+    /// provider instead of falling back to the default (highest-priority)
+    /// provider for the bare model name.
+    /// </summary>
+    private string NormalizeRequestedModel(string model)
+    {
+        string clean = model.Trim();
+
+        int displayPrefix = clean.IndexOf(" - ", StringComparison.Ordinal);
+        if (displayPrefix > 0 && displayPrefix + 3 < clean.Length)
+        {
+            string rawProvider = clean[..displayPrefix].Trim();
+            string rawModel = clean[(displayPrefix + 3)..].Trim();
+
+            if (_providers.Any(p => p.Name.Equals(rawProvider, StringComparison.OrdinalIgnoreCase)))
+            {
+                string bareModel = StripTagSuffix(rawModel);
+                string canonicalProvider = _providers.First(p => p.Name.Equals(rawProvider, StringComparison.OrdinalIgnoreCase)).Name;
+                return $"{bareModel}@{canonicalProvider}";
+            }
+
+            clean = rawModel;
+        }
+
+        return StripTagSuffix(clean);
     }
 
     internal string ResolveUpstreamModel(string? requestedModel)

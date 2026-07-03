@@ -203,6 +203,33 @@ public class EndpointTests(ProxyFixture fixture)
         Assert.Equal(JsonValueKind.Array, d.RootElement.GetProperty("models").ValueKind);
     }
 
+    [Fact]
+    public async Task ApiTags_UsesQualifiedModelFieldForRouting()
+    {
+        string body = await _client.GetStringAsync("/api/tags");
+        using JsonDocument d = JsonDocument.Parse(body);
+
+        JsonElement? deepseekPro = null;
+        foreach (JsonElement model in d.RootElement.GetProperty("models").EnumerateArray())
+        {
+            if (model.GetProperty("name").GetString() == "DEEPSEEK - deepseek-v4-pro:latest")
+            {
+                deepseekPro = model;
+                break;
+            }
+        }
+
+        Assert.True(deepseekPro.HasValue, "Expected deepseek-v4-pro to be listed in /api/tags.");
+        Assert.Equal("deepseek-v4-pro@deepseek:latest", deepseekPro.Value.GetProperty("model").GetString());
+
+        string[] aliases = deepseekPro.Value.GetProperty("aliases")
+            .EnumerateArray()
+            .Select(a => a.GetString()!)
+            .ToArray();
+        Assert.Contains("deepseek-v4-pro", aliases);
+        Assert.Contains("deepseek-v4-pro@deepseek:latest", aliases);
+    }
+
     // /api/show ───────────────────────────────────────────────────────────────
 
     [Fact]

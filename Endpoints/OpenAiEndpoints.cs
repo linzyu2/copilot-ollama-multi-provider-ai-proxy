@@ -20,8 +20,10 @@ internal static class OpenAiEndpoints
             List<(string Provider, string Model)> allModels = [];
             HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
 
-            // 1) Enumerate everything already in the live catalog (covers both bare
-            //    and qualified aliases that the routing layer actually accepts).
+            // 1) First pass: collect qualified models (containing '@') directly;
+            //    defer bare models so we know whether a qualified variant exists.
+            List<(string Provider, string Model)> bareCandidates = [];
+
             foreach (string modelId in modelCatalog.AvailableModels)
             {
                 if (string.IsNullOrWhiteSpace(modelId))
@@ -48,29 +50,44 @@ internal static class OpenAiEndpoints
 
                 if (seen.Add(modelId))
                 {
-                    allModels.Add((providerName, modelId));
-                }
-                // Also surface the bare form when the catalog only registered the
-                // qualified one (helps clients that prefer short ids).
-                if (modelId.Contains('@'))
-                {
-                    string bare = modelId[..modelId.IndexOf('@')];
-                    if (seen.Add(bare))
+                    if (modelId.Contains('@'))
                     {
-                        allModels.Add((providerName, bare));
+                        allModels.Add((providerName, modelId));
+                    }
+                    else
+                    {
+                        bareCandidates.Add((providerName, modelId));
                     }
                 }
-                _ = displayModel; // currently unused beyond the assignments above
+                _ = displayModel;
             }
 
-            // 2) Add any model known by its upstream id but not present yet
+            // 2) Add bare models only when no qualified variant (bare@provider) exists.
+            foreach ((string prov, string bare) in bareCandidates)
+            {
+                string qualified = $"{bare}@{prov}";
+                if (!seen.Contains(qualified))
+                {
+                    allModels.Add((prov, bare));
+                }
+            }
+
+            // 3) Add any model known by its upstream id but not present yet
             //    (defensive: catalogs populated outside the discoverer).
             foreach (KeyValuePair<string, ProviderInfo> kv in providerRegistry.ModelToProvider)
             {
-                if (seen.Add(kv.Key))
+                if (!seen.Add(kv.Key))
+                    continue;
+
+                // Skip bare forms whose qualified variant is already listed.
+                if (!kv.Key.Contains('@'))
                 {
-                    allModels.Add((kv.Value.Name, kv.Key));
+                    string qualified = $"{kv.Key}@{kv.Value.Name}";
+                    if (seen.Contains(qualified))
+                        continue;
                 }
+
+                allModels.Add((kv.Value.Name, kv.Key));
             }
 
             // Sort by provider name then model name for stable output.
@@ -135,6 +152,8 @@ internal static class OpenAiEndpoints
                 ctx.Response.Headers["X-Proxy-Primary-Provider"] = candidates[0].Provider.Name;
                 ctx.Response.Headers["X-Proxy-Primary-Upstream"] = candidates[0].UpstreamModel;
             }
+
+            Console.WriteLine($"rquest model: \"{reqModel}\" → effectiveModel: \"{effectiveModel}\" → Provider Name: \"{candidates[0].Provider.Name}\"");
 
             string? modifiedRequest = requestTransformer.ModifyRequest(doc);
 
