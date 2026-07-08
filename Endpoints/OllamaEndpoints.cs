@@ -168,7 +168,8 @@ internal static class OllamaEndpoints
             ModelCatalogService modelCatalog,
             ChatStreamingService chatStreaming,
             ReasoningCacheService reasoningCache,
-            RequestTransformer requestTransformer) =>
+            RequestTransformer requestTransformer,
+            ModelConcurrencyLimiter concurrencyLimiter) =>
         {
             CancellationToken ct = ctx.RequestAborted;
             await modelCatalog.RefreshAvailableModelsIfNeeded(ct);
@@ -195,6 +196,10 @@ internal static class OllamaEndpoints
 
             using CancellationTokenSource? ollamaTimeoutCts = modelCatalog.CreateModelTimeoutCts(ollamaEffectiveModel, ct);
             CancellationToken ollamaCt = ollamaTimeoutCts?.Token ?? ct;
+            await using ModelConcurrencyLimiter.Lease concurrencyLease = await concurrencyLimiter.AcquireAsync(
+                ollamaEffectiveModel,
+                ollamaExec.MaxConcurrency,
+                ollamaCt);
 
             // ── Ollama Cloud / Native Ollama passthrough ──────────────────
             if (ollamaProvider.Capabilities.ApiFormat == ApiFormat.Ollama)

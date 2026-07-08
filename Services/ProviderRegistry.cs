@@ -10,7 +10,23 @@ internal sealed class ProviderRegistry
         DefaultModel = Environment.GetEnvironmentVariable("DEEPSEEK_MODEL") ?? "deepseek-v4-flash";
         DiscoverProviders(httpClientFactory);
 
-        if (_providers.Count == 0)
+        // ── Startup diagnostic: print all registered providers ──
+        if (_providers.Count > 0)
+        {
+            Console.WriteLine("╔══════════════════════════════════════════════════════════════════╗");
+            Console.WriteLine("║  Registered Providers                                           ║");
+            Console.WriteLine("╠══════════════════════════════════════════════════════════════════╣");
+            foreach (ProviderInfo p in _providers)
+            {
+                string maskedKey = p.ApiKey.Length > 8
+                    ? p.ApiKey[..8] + "…"
+                    : p.ApiKey.Length > 0 ? "****" : "(no key)";
+                Console.WriteLine($"║  {p.Name,-12} │ {p.BaseUrl,-46} ║");
+                Console.WriteLine($"║  {' ',12} │ API Key: {maskedKey,-36} ║");
+            }
+            Console.WriteLine("╚══════════════════════════════════════════════════════════════════╝");
+        }
+        else
         {
             Console.WriteLine("╔══════════════════════════════════════════════════════════════════╗");
             Console.WriteLine("║  ⚠️  No se encontraron API keys configuradas.                    ║");

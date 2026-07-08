@@ -130,6 +130,7 @@ config/model-selection/
         "temperature": 0.2,
         "top_p": 0.9,
         "max_tokens": 16384,
+        "max_concurrency": 2,
         "timeout_seconds": 240
       }
     }
@@ -153,6 +154,7 @@ config/model-selection/
 | `models[].execution.temperature` | float | No | Default temperature |
 | `models[].execution.top_p` | float | No | Default top_p |
 | `models[].execution.max_tokens` | int | No | Default max_tokens |
+| `models[].execution.max_concurrency` | int | No | Max in-proxy concurrent upstream requests for that model |
 | `models[].execution.reasoning_effort` | string | No | "low", "medium", "high" |
 | `models[].execution.timeout_seconds` | int | No | Request timeout |
 | `models[].execution.override_client_params` | bool | No | Force-override client values |

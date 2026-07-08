@@ -114,7 +114,8 @@ internal static class OpenAiEndpoints
             RequestTransformer requestTransformer,
             ModelCatalogService modelCatalog,
             ChatStreamingService chatStreaming,
-            ReasoningCacheService reasoningCache) =>
+            ReasoningCacheService reasoningCache,
+            ModelConcurrencyLimiter concurrencyLimiter) =>
         {
             CancellationToken ct = ctx.RequestAborted;
 
@@ -153,12 +154,15 @@ internal static class OpenAiEndpoints
                 ctx.Response.Headers["X-Proxy-Primary-Upstream"] = candidates[0].UpstreamModel;
             }
 
-            Console.WriteLine($"rquest model: \"{reqModel}\" → effectiveModel: \"{effectiveModel}\" → Provider Name: \"{candidates[0].Provider.Name}\"");
-
             string? modifiedRequest = requestTransformer.ModifyRequest(doc);
+            ModelExecutionConfig executionConfig = modelCatalog.GetExecutionConfigForModel(effectiveModel);
 
             using CancellationTokenSource? timeoutCts = modelCatalog.CreateModelTimeoutCts(effectiveModel, ct);
             CancellationToken requestCt = timeoutCts?.Token ?? ct;
+            await using ModelConcurrencyLimiter.Lease concurrencyLease = await concurrencyLimiter.AcquireAsync(
+                effectiveModel,
+                executionConfig.MaxConcurrency,
+                requestCt);
 
             if (!isStream)
             {
@@ -186,13 +190,16 @@ internal static class OpenAiEndpoints
                             continue;
                         }
 
+                        // ── Diagnostic: log the exact upstream URL being called ──
+                        string upstreamUrl = $"{candidateProvider.BaseUrl.TrimEnd('/')}/{candidateProvider.Capabilities.ChatPath.TrimStart('/')}";
+                        Console.WriteLine($"[UPSTREAM Request] Calling → {upstreamUrl} Provider: {candidateProvider.Name}, ChatPath: {candidateProvider.Capabilities.ChatPath}, Model in body: \"{candidateUpstream}\"");
+
                         using StringContent content = new(candidateBody, Encoding.UTF8, "application/json");
                         HttpResponseMessage response = await candidateProvider.Client.SendAsync(
                             new HttpRequestMessage(HttpMethod.Post, candidateProvider.Capabilities.ChatPath) { Content = content },
                             requestCt);
 
                         string respBody = await response.Content.ReadAsStringAsync(ct);
-
                         if (response.IsSuccessStatusCode)
                         {
                             reasoningCache.CacheReasoningFromResponse(respBody);
@@ -202,6 +209,9 @@ internal static class OpenAiEndpoints
                             response.Dispose();
                             return;
                         }
+
+                        // ── Log upstream errors for diagnostics ──
+                        Console.WriteLine($"[UPSTREAM Response] Status: {(int)response.StatusCode} {response.ReasonPhrase} Body: {respBody}");
 
                         lastResponse?.Dispose();
                         lastResponse = response;
@@ -251,12 +261,17 @@ internal static class OpenAiEndpoints
             };
             upstreamReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
+            // ── Diagnostic: log streaming upstream URL ──
+            string streamingUpstreamUrl = $"{provider.BaseUrl.TrimEnd('/')}/{provider.Capabilities.ChatPath.TrimStart('/')}";
+            Console.WriteLine($"[UPSTREAM Request] Calling → {streamingUpstreamUrl} Provider: {provider.Name}, Model in body: \"{upstreamModel}\"");
+
             using HttpResponseMessage upstreamResp = await provider.Client.SendAsync(
                 upstreamReq, HttpCompletionOption.ResponseHeadersRead, requestCt);
 
             if (!upstreamResp.IsSuccessStatusCode)
             {
                 string errBody = await upstreamResp.Content.ReadAsStringAsync(ct);
+                Console.WriteLine($"[UPSTREAM Response ERROR] Status: {(int)upstreamResp.StatusCode} {upstreamResp.ReasonPhrase} Body: {errBody}");
                 ctx.Response.StatusCode = (int)upstreamResp.StatusCode;
                 ctx.Response.ContentType = "application/json";
                 await ctx.Response.WriteAsync(errBody, ct);

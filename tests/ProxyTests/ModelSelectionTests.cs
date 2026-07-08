@@ -81,6 +81,7 @@ public class ModelSelectionTests
                             MaxTokensPreferred: execE.TryGetProperty("max_tokens", out JsonElement maxTokE) && maxTokE.ValueKind == JsonValueKind.Number ? maxTokE.GetInt32() : null,
                             ReasoningEffort: execE.TryGetProperty("reasoning_effort", out JsonElement reE) && reE.ValueKind == JsonValueKind.String ? reE.GetString() : null,
                             TimeoutSeconds: execE.TryGetProperty("timeout_seconds", out JsonElement timeoutE) && timeoutE.ValueKind == JsonValueKind.Number ? timeoutE.GetInt32() : null,
+                            MaxConcurrency: execE.TryGetProperty("max_concurrency", out JsonElement maxConcE) && maxConcE.ValueKind == JsonValueKind.Number ? maxConcE.GetInt32() : null,
                             OverrideClientParams: execE.TryGetProperty("override_client_params", out JsonElement ovE) && ovE.ValueKind is JsonValueKind.True or JsonValueKind.False && ovE.GetBoolean()
                         );
                     }
@@ -132,7 +133,8 @@ public class ModelSelectionTests
                     "context_length": 1000000,
                     "max_output_tokens": 16384,
                     "supports_tools": true,
-                    "timeout_seconds": 120
+                    "timeout_seconds": 120,
+                    "max_concurrency": 2
                   }
                 }
               ]
@@ -148,6 +150,7 @@ public class ModelSelectionTests
         Assert.True(entry.Enabled);
         Assert.Equal(1_000_000, entry.Execution.ContextLength);
         Assert.Equal(16384, entry.Execution.MaxOutputTokens);
+        Assert.Equal(2, entry.Execution.MaxConcurrency);
         Assert.True(entry.Execution.SupportsTools);
         Assert.Equal(120, entry.Execution.TimeoutSeconds);
     }

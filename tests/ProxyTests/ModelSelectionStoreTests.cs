@@ -29,6 +29,18 @@ public class ModelSelectionStoreTests
     }
 
     [Fact]
+    public void GetExecutionConfigForModel_OpenRouterFreeModel_HasMaxConcurrency()
+    {
+        ModelSelectionStore store = new();
+        ProviderHttpClientFactory factory = new();
+        ProviderRegistry registry = new(factory);
+
+        ModelExecutionConfig config = store.GetExecutionConfigForModel("nvidia/nemotron-3-super-120b-a12b:free", registry.ModelToProvider);
+
+        Assert.Equal(1, config.MaxConcurrency);
+    }
+
+    [Fact]
     public void GetExecutionConfigForModel_UnknownModel_ReturnsDefaults()
     {
         ModelSelectionStore store = new();
