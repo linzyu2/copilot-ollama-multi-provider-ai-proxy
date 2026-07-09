@@ -79,7 +79,8 @@ internal static class ProviderCapabilitiesRegistry
             ChatPath: "v1/chat/completions",
             ModelsPath: "v1/models",
             DefaultBaseUrl: "https://openrouter.ai/api",
-            EnvPrefix: "OPENROUTER"),
+            EnvPrefix: "OPENROUTER",
+            SupportsReasoningObject: true),
 
         ["groq"] = new(
             Category: ProviderCategory.MultiModel,

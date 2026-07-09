@@ -12,14 +12,17 @@ internal sealed class OllamaResponseBuilder
         (int ContextLength, int MaxOutputTokens, bool SupportsTools, bool SupportsVision, string[] Capabilities, string Family) p = _modelCatalogService.GetModelProfile(model);
         ModelExecutionConfig exec = _modelCatalogService.GetExecutionConfigForModel(model);
 
+        List<string> capabilities = [.. p.Capabilities];
+        if (exec.SupportsReasoning == true && !capabilities.Contains("reason"))
+        {
+            capabilities.Add("reason");
+        }
+
         return new Dictionary<string, object?>
         {
-            ["model"] = model,
             ["modified_at"] = DateTime.UtcNow.ToString("o"),
-            ["size"] = 3_826_793_677L,
-            ["digest"] = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             ["license"] = "NIM API",
-            ["modelfile"] = $"FROM {model}",
+            ["modelfile"] = $"FROM {model}\nTEMPLATE \"\"\"{{{{ .Prompt }}}}\"\"\"",//$"FROM {model}",
             ["parameters"] = BuildOllamaParametersString(p.ContextLength, p.MaxOutputTokens, exec),
             ["template"] = "{{ .Prompt }}",
             ["details"] = new Dictionary<string, object?>
@@ -29,13 +32,15 @@ internal sealed class OllamaResponseBuilder
                 ["family"] = p.Family,
                 ["families"] = new[] { p.Family },
                 ["parameter_size"] = "api",
-                ["quantization_level"] = "none"
+                ["quantization_level"] = "none",
+                ["context_length"] = p.ContextLength
             },
             ["model_info"] = new Dictionary<string, object?>
             {
                 ["general.architecture"] = p.Family,
                 ["general.basename"] = model,
                 ["general.context_length"] = p.ContextLength,
+                ["general.capabilities"] = capabilities.ToArray(),
                 ["context_length"] = p.ContextLength,
                 ["max_output_tokens"] = p.MaxOutputTokens,
                 ["input_token_limit"] = p.ContextLength,
@@ -43,18 +48,10 @@ internal sealed class OllamaResponseBuilder
                 ["supports_tools"] = p.SupportsTools,
                 ["supports_tool_calls"] = p.SupportsTools,
                 ["supports_vision"] = p.SupportsVision,
-                ["supports_images"] = p.SupportsVision
+                ["supports_images"] = p.SupportsVision,
+                ["proxy.recommended_parameters"] = BuildRecommendedParameters(exec)
             },
-            ["capabilities"] = p.Capabilities,
-            ["context_length"] = p.ContextLength,
-            ["max_output_tokens"] = p.MaxOutputTokens,
-            ["input_token_limit"] = p.ContextLength,
-            ["output_token_limit"] = p.MaxOutputTokens,
-            ["supports_tools"] = p.SupportsTools,
-            ["supports_tool_calls"] = p.SupportsTools,
-            ["supports_vision"] = p.SupportsVision,
-            ["supports_images"] = p.SupportsVision,
-            ["recommended_parameters"] = BuildRecommendedParameters(exec)
+            ["capabilities"] = capabilities.ToArray()
         };
     }
 

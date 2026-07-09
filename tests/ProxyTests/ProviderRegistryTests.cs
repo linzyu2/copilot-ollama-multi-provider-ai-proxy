@@ -40,7 +40,7 @@ public class ProviderRegistryTests
 
         string result = registry.ResolveModel(null);
 
-        Assert.Equal("deepseek-v4-pro", result);
+        Assert.Equal("deepseek-v4-flash", result);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class ProviderRegistryTests
 
         string result = registry.ResolveModel("");
 
-        Assert.Equal("deepseek-v4-pro", result);
+        Assert.Equal("deepseek-v4-flash", result);
     }
 
     [Fact]
@@ -127,6 +127,8 @@ public class ProviderRegistryTests
         // When the display prefix names a different provider, the resolved
         // model should include the @provider qualifier so it doesn't fall
         // back to the highest-priority provider for the bare model name.
+        Environment.SetEnvironmentVariable("PROVIDER_OPENROUTER_API_KEY", "test-key");
+        Environment.SetEnvironmentVariable("PROVIDER_OPENROUTER_BASE_URL", "http://openrouter.test");
         ProviderHttpClientFactory factory = new();
         ProviderRegistry registry = new(factory);
 

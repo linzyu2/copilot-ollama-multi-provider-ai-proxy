@@ -36,5 +36,6 @@ public readonly record struct ProviderCapabilities(
     string ChatPath,
     string ModelsPath,
     string DefaultBaseUrl,
-    string EnvPrefix
+    string EnvPrefix,
+    bool SupportsReasoningObject = false
 );

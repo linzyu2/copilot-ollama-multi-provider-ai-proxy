@@ -94,9 +94,6 @@ internal static class OllamaEndpoints
                         // Ollama/BYOM clients can round-trip the selected value without
                         // falling back to the default provider.
                         model = qualifiedModel,
-                        // Keep both bare and qualified aliases for compatibility with clients
-                        // that still expect or persist the upstream model name.
-                        aliases = new[] { routedModel, qualifiedModel },
                         modified_at = DateTime.UtcNow.ToString("o"),
                         size = 3_826_793_677L,
                         digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -108,30 +105,7 @@ internal static class OllamaEndpoints
                             families = new[] { p.Family },
                             parameter_size = "api",
                             quantization_level = "none"
-                        },
-                        capabilities = p.Capabilities,
-                            context_length = p.ContextLength,
-                            max_output_tokens = p.MaxOutputTokens,
-                            input_token_limit = p.ContextLength,
-                            output_token_limit = p.MaxOutputTokens,
-                            supports_tools = p.SupportsTools,
-                            supports_tool_calls = p.SupportsTools,
-                            supports_vision = p.SupportsVision,
-                            supports_images = p.SupportsVision,
-                            model_info = new Dictionary<string, object?>
-                            {
-                                ["general.architecture"] = p.Family,
-                                ["general.basename"] = routedModel,
-                                ["general.context_length"] = p.ContextLength,
-                                ["context_length"] = p.ContextLength,
-                                ["max_output_tokens"] = p.MaxOutputTokens,
-                                ["input_token_limit"] = p.ContextLength,
-                                ["output_token_limit"] = p.MaxOutputTokens,
-                                ["supports_tools"] = p.SupportsTools,
-                                ["supports_tool_calls"] = p.SupportsTools,
-                                ["supports_vision"] = p.SupportsVision,
-                                ["supports_images"] = p.SupportsVision
-                            }
+                        }
                     };
                 }).ToArray()
             }, JsonDefaults.SnakeCase);

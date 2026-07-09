@@ -209,25 +209,23 @@ public class EndpointTests(ProxyFixture fixture)
         string body = await _client.GetStringAsync("/api/tags");
         using JsonDocument d = JsonDocument.Parse(body);
 
-        JsonElement? deepseekPro = null;
+        JsonElement? deepseekFlash = null;
         foreach (JsonElement model in d.RootElement.GetProperty("models").EnumerateArray())
         {
-            if (model.GetProperty("name").GetString() == "DEEPSEEK - deepseek-v4-pro:latest")
+            if (model.GetProperty("name").GetString() == "DEEPSEEK - deepseek-v4-flash")
             {
-                deepseekPro = model;
+                deepseekFlash = model;
                 break;
             }
         }
 
-        Assert.True(deepseekPro.HasValue, "Expected deepseek-v4-pro to be listed in /api/tags.");
-        Assert.Equal("deepseek-v4-pro@deepseek:latest", deepseekPro.Value.GetProperty("model").GetString());
+        Assert.True(deepseekFlash.HasValue, "Expected deepseek-v4-flash to be listed in /api/tags.");
+        Assert.Equal("deepseek-v4-flash@deepseek:latest", deepseekFlash.Value.GetProperty("model").GetString());
 
-        string[] aliases = deepseekPro.Value.GetProperty("aliases")
-            .EnumerateArray()
-            .Select(a => a.GetString()!)
-            .ToArray();
-        Assert.Contains("deepseek-v4-pro", aliases);
-        Assert.Contains("deepseek-v4-pro@deepseek:latest", aliases);
+        // /api/tags follows the official Ollama schema: only name, model, modified_at,
+        // size, digest and details are present. The qualified alias lives in "model".
+        Assert.False(deepseekFlash.Value.TryGetProperty("aliases", out _),
+            "/api/tags must not expose a non-standard 'aliases' field.");
     }
 
     // /api/show ───────────────────────────────────────────────────────────────

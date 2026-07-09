@@ -37,6 +37,7 @@ builder.Services.AddSingleton<ModelSelectionStore>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<ModelConcurrencyLimiter>();
 builder.Services.AddSingleton<ReasoningCacheService>();
+builder.Services.AddSingleton<TokenizerService>();
 builder.Services.AddSingleton<RequestTransformer>();
 builder.Services.AddSingleton<OllamaResponseBuilder>();
 builder.Services.AddSingleton<ChatStreamingService>();

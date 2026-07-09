@@ -214,16 +214,13 @@ curl http://localhost:11434/api/tags
         "families": ["deepseek"],
         "parameter_size": "api",
         "quantization_level": "none"
-      },
-      "capabilities": ["completion", "tools"],
-      "context_length": 1048576,
-      "max_output_tokens": 384000,
-      "supports_tools": true,
-      "supports_vision": false,
-      "supports_images": false
+      }
     }
   ]
 }
+```
+
+> **Schema note:** The example above shows the official Ollama `/api/tags` shape. Only `name`, `model`, `modified_at`, `size`, `digest` and `details` are returned at the top level. Capability/context metadata (`capabilities`, `context_length`, `supports_*`, `model_info`, etc.) is **not** part of `/api/tags` and is instead exposed by `/api/show`. The `model` field carries the provider-qualified alias (`model@provider:latest`) so requests route to the correct provider.
 ```
 
 **Important:** The `model` field uses `model@provider:latest` format. When sending this model back via POST, the provider-qualified form ensures correct routing to the specific provider instead of falling back to the default provider.

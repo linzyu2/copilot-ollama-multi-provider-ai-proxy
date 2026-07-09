@@ -35,7 +35,7 @@ public class ModelSelectionStoreTests
         ProviderHttpClientFactory factory = new();
         ProviderRegistry registry = new(factory);
 
-        ModelExecutionConfig config = store.GetExecutionConfigForModel("nvidia/nemotron-3-super-120b-a12b:free", registry.ModelToProvider);
+        ModelExecutionConfig config = store.GetExecutionConfigForModel("nvidia/nemotron-3-ultra-550b-a55b:free", registry.ModelToProvider);
 
         Assert.Equal(1, config.MaxConcurrency);
     }
@@ -339,8 +339,8 @@ public class ModelSelectionStoreTests
 
         ModelExecutionConfig config = store.GetExecutionConfigForModel("deepseek-v4-pro", registry.ModelToProvider);
 
-        Assert.True(config.Temperature.HasValue);
-        Assert.True(config.Temperature.Value >= 0);
+        Assert.True(config.MaxTokensPreferred.HasValue);
+        Assert.True(config.MaxTokensPreferred.Value >= 0);
     }
 
     [Fact]

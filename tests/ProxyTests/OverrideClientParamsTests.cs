@@ -198,7 +198,7 @@ public class OverrideClientParamsTests
         ModelSelectionStore modelSelectionStore = new();
         ModelCatalogService modelCatalog = new(providerRegistry, modelSelectionStore);
         ReasoningCacheService cache = new();
-        return new RequestTransformer(modelCatalog, cache);
+        return new RequestTransformer(modelCatalog, cache, new TokenizerService());
     }
 
     private static ModelSelectionEntry[] ParseSelections(string json)

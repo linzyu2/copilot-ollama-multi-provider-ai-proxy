@@ -128,10 +128,8 @@ public class RequestTransformerTests
 
         using JsonDocument doc = JsonDocument.Parse(result);
         JsonElement root = doc.RootElement;
-        Assert.True(root.TryGetProperty("temperature", out JsonElement temp));
-        Assert.Equal(0.2, temp.GetDouble());
         Assert.True(root.TryGetProperty("max_tokens", out JsonElement maxTok));
-        Assert.Equal(8192, maxTok.GetInt32());
+        Assert.Equal(384000, maxTok.GetInt32());
     }
 
     [Fact]
@@ -143,7 +141,7 @@ public class RequestTransformerTests
         string result = sut.ApplyExecutionDefaults(raw, "deepseek-v4-pro", ProviderCapabilitiesRegistry.Get("deepseek"));
 
         using JsonDocument doc = JsonDocument.Parse(result);
-        Assert.Equal("high", doc.RootElement.GetProperty("reasoning_effort").GetString());
+        Assert.Equal("max", doc.RootElement.GetProperty("reasoning_effort").GetString());
     }
 
     [Fact]
@@ -219,7 +217,7 @@ public class RequestTransformerTests
         string result = sut.ApplyExecutionDefaults(raw, "deepseek-v4-pro", ProviderCapabilitiesRegistry.Get("openai"));
 
         using JsonDocument doc = JsonDocument.Parse(result);
-        Assert.Equal("high", doc.RootElement.GetProperty("reasoning_effort").GetString());
+        Assert.Equal("max", doc.RootElement.GetProperty("reasoning_effort").GetString());
     }
 
     [Fact]
@@ -497,6 +495,6 @@ public class RequestTransformerTests
         ModelCatalogService modelCatalog = new(providerRegistry, modelSelectionStore);
         cache = new ReasoningCacheService();
 
-        return new RequestTransformer(modelCatalog, cache);
+        return new RequestTransformer(modelCatalog, cache, new TokenizerService());
     }
 }

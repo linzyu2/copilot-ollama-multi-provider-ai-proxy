@@ -23,7 +23,8 @@ public class OllamaResponseBuilderTests
         OllamaResponseBuilder builder = CreateBuilder();
         Dictionary<string, object?> result = builder.BuildOllamaShowResponse("deepseek-v4-pro");
 
-        Assert.Equal("deepseek-v4-pro", result["model"]);
+        Assert.True(result.ContainsKey("modelfile"));
+        Assert.Contains("deepseek-v4-pro", result["modelfile"]?.ToString());
     }
 
     [Fact]
@@ -44,8 +45,9 @@ public class OllamaResponseBuilderTests
         OllamaResponseBuilder builder = CreateBuilder();
         Dictionary<string, object?> result = builder.BuildOllamaShowResponse("deepseek-v4-pro");
 
-        Assert.True(result.ContainsKey("context_length"));
-        int ctx = Convert.ToInt32(result["context_length"]);
+        Dictionary<string, object?> modelInfo = (Dictionary<string, object?>)result["model_info"]!;
+        Assert.True(modelInfo.ContainsKey("context_length"));
+        int ctx = Convert.ToInt32(modelInfo["context_length"]);
         Assert.True(ctx > 0);
     }
 
@@ -55,8 +57,9 @@ public class OllamaResponseBuilderTests
         OllamaResponseBuilder builder = CreateBuilder();
         Dictionary<string, object?> result = builder.BuildOllamaShowResponse("deepseek-v4-pro");
 
-        Assert.True(result.ContainsKey("max_output_tokens"));
-        int maxOut = Convert.ToInt32(result["max_output_tokens"]);
+        Dictionary<string, object?> modelInfo = (Dictionary<string, object?>)result["model_info"]!;
+        Assert.True(modelInfo.ContainsKey("max_output_tokens"));
+        int maxOut = Convert.ToInt32(modelInfo["max_output_tokens"]);
         Assert.True(maxOut > 0);
     }
 
@@ -78,8 +81,9 @@ public class OllamaResponseBuilderTests
         OllamaResponseBuilder builder = CreateBuilder();
         Dictionary<string, object?> result = builder.BuildOllamaShowResponse("deepseek-v4-pro");
 
-        Assert.True(result.ContainsKey("recommended_parameters"));
-        Dictionary<string, object?> recParams = (Dictionary<string, object?>)result["recommended_parameters"]!;
+        Dictionary<string, object?> modelInfo = (Dictionary<string, object?>)result["model_info"]!;
+        Assert.True(modelInfo.ContainsKey("proxy.recommended_parameters"));
+        Dictionary<string, object?> recParams = (Dictionary<string, object?>)modelInfo["proxy.recommended_parameters"]!;
         Assert.NotEmpty(recParams);
     }
 
@@ -136,8 +140,9 @@ public class OllamaResponseBuilderTests
         OllamaResponseBuilder builder = CreateBuilder();
         Dictionary<string, object?> result = builder.BuildOllamaShowResponse("deepseek-v4-pro");
 
-        Assert.True(result.ContainsKey("supports_vision"));
-        Assert.True(result.ContainsKey("supports_images"));
+        Dictionary<string, object?> modelInfo = (Dictionary<string, object?>)result["model_info"]!;
+        Assert.True(modelInfo.ContainsKey("supports_vision"));
+        Assert.True(modelInfo.ContainsKey("supports_images"));
     }
 
     [Fact]
@@ -148,8 +153,8 @@ public class OllamaResponseBuilderTests
         Dictionary<string, object?> result1 = builder.BuildOllamaShowResponse("deepseek-v4-pro");
         Dictionary<string, object?> result2 = builder.BuildOllamaShowResponse("gpt-5");
 
-        int ctx1 = Convert.ToInt32(result1["context_length"]);
-        int ctx2 = Convert.ToInt32(result2["context_length"]);
+        int ctx1 = Convert.ToInt32(((Dictionary<string, object?>)result1["model_info"]!)["context_length"]);
+        int ctx2 = Convert.ToInt32(((Dictionary<string, object?>)result2["model_info"]!)["context_length"]);
 
         Assert.NotEqual(ctx1, ctx2);
     }
@@ -173,5 +178,33 @@ public class OllamaResponseBuilderTests
 
         Assert.True(result.ContainsKey("license"));
         Assert.Equal("NIM API", result["license"]);
+    }
+
+    [Fact]
+    public void BuildOllamaShowResponse_DetailsHasContextLength()
+    {
+        OllamaResponseBuilder builder = CreateBuilder();
+        Dictionary<string, object?> result = builder.BuildOllamaShowResponse("deepseek-v4-pro");
+
+        Dictionary<string, object?> details = (Dictionary<string, object?>)result["details"]!;
+        Assert.True(details.ContainsKey("context_length"));
+        int ctx = Convert.ToInt32(details["context_length"]);
+        Assert.Equal(
+            Convert.ToInt32(((Dictionary<string, object?>)result["model_info"]!)["context_length"]),
+            ctx);
+    }
+
+    [Fact]
+    public void BuildOllamaShowResponse_SupportsReasoningMapsToCapabilities()
+    {
+        OllamaResponseBuilder builder = CreateBuilder();
+        Dictionary<string, object?> result = builder.BuildOllamaShowResponse("kimi-k2.7-code");
+
+        string[] caps = (string[])result["capabilities"]!;
+        Assert.Contains("reason", caps);
+
+        Dictionary<string, object?> modelInfo = (Dictionary<string, object?>)result["model_info"]!;
+        string[] generalCaps = (string[])modelInfo["general.capabilities"]!;
+        Assert.Contains("reason", generalCaps);
     }
 }

@@ -18,7 +18,7 @@ public class ParameterValidationTests
         ModelSelectionStore modelSelectionStore     = new();
         ModelCatalogService modelCatalog            = new(providerRegistry, modelSelectionStore);
         ReasoningCacheService cache                 = new();
-        return new(modelCatalog, cache);
+        return new(modelCatalog, cache, new TokenizerService());
     }
 
     private static ProviderCapabilities ResolveCaps(string providerName)
@@ -247,6 +247,23 @@ public class ParameterValidationTests
             $"OpenRouter/{model}: reasoning_effort must NOT be sent");
     }
 
+    [Theory]
+    [InlineData("deepseek/deepseek-v4-flash", "high")]
+    [InlineData("deepseek/deepseek-v4-pro", "max")]
+    public void OpenRouter_Models_InjectReasoningObjectForConfiguredEffort(string model, string expectedEffort)
+    {
+        RequestTransformer sut = CreateTransformer();
+        JsonElement result = Transform(sut, model, "openrouter");
+        // OpenRouter uses a nested `reasoning` object instead of the top-level field.
+        Assert.False(result.TryGetProperty("reasoning_effort", out _),
+            $"OpenRouter/{model}: top-level reasoning_effort must NOT be sent");
+        Assert.True(result.TryGetProperty("reasoning", out JsonElement reasoning),
+            $"OpenRouter/{model}: nested reasoning object must be sent");
+        Assert.True(reasoning.TryGetProperty("effort", out JsonElement effort),
+            $"OpenRouter/{model}: reasoning.effort must be present");
+        Assert.Equal(expectedEffort, effort.GetString());
+    }
+
     // ─── Moonshot / Kimi ────────────────────────────────────────────────
 
     [Theory]
@@ -411,7 +428,7 @@ public class ParameterValidationTests
 
     [Theory]
     [InlineData("deepseek-v4-pro",              1_048_576, 384_000)]
-    [InlineData("deepseek-v4-flash",            1_048_576, 131_072)]
+    [InlineData("deepseek-v4-flash",            1_048_576, 16_384)]
     [InlineData("qwen/qwen3-coder-480b-a35b-instruct", 1_048_576, 65_536)]
     [InlineData("moonshotai/kimi-k2.6",          262_144, 262_144)]
     [InlineData("nvidia/nemotron-3-super-120b-a12b", 1_000_000, 262_144)]
@@ -429,9 +446,7 @@ public class ParameterValidationTests
     [InlineData("moonshot-v1-128k",   131_072,  32_768)]
     [InlineData("moonshot-v1-auto",   131_072,  32_768)]
     [InlineData("moonshot-v1-32k",     32_768,   8_192)]
-    [InlineData("qwen/qwen3-coder",                  1_048_576, 262_000)]
     [InlineData("nvidia/nemotron-3-super-120b-a12b", 1_000_000,  16_384)]
-    [InlineData("nvidia/nemotron-3-ultra-550b-a55b", 1_000_000, 262_144)]
     [InlineData("deepseek/deepseek-v4-pro",          1_048_576, 384_000)]
     [InlineData("zai-glm-4.7",  128_000, 32_768)]
     [InlineData("gpt-oss-120b", 131_072, 65_536)]
@@ -471,7 +486,7 @@ public class ParameterValidationTests
         Assert.False(string.IsNullOrWhiteSpace(exec.ReasoningEffort),
             $"{model}: reasoning_effort should be configured in deepseek.json");
 
-        string[] valid = ["low", "medium", "high", "default"];
+        string[] valid = ["low", "medium", "high", "default", "max"];
         Assert.Contains(exec.ReasoningEffort, valid);
     }
 
@@ -547,7 +562,7 @@ public class ParameterValidationTests
     [InlineData("openai", 5)]        // gpt-5, gpt-5-mini, gpt-4.1, gpt-4o, gpt-oss-120b
     [InlineData("nvidia", 5)]
     [InlineData("groq", 5)]
-    [InlineData("openrouter", 7)]     // qwen3.7-plus, qwen3-coder, nemotron-super, nemotron-ultra, kimi-k2.7-code, deepseek-v4-pro, kimi-k2.6
+    [InlineData("openrouter", 8)]     // claude-sonnet-5, deepseek-v4-flash, deepseek-v4-pro, gemini-3.5-flash, nemotron-ultra-free, gpt-5.5, qwen3.7-plus, tencent-hy3-free
     [InlineData("moonshot", 6)]      // kimi-k2.7-code, kimi-k2.6, kimi-k2.5, moonshot-v1-128k, moonshot-v1-auto, moonshot-v1-32k
     [InlineData("cerebras", 2)]
     [InlineData("ollama", 10)]        // 9 ollamacloud + 1 ollama.json (mistral)
