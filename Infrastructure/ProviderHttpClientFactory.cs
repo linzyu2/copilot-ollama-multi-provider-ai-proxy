@@ -62,8 +62,21 @@ internal sealed class ProviderHttpClientFactory
 
             if (!string.IsNullOrWhiteSpace(title))
             {
+                // Both the legacy X-Title and the newer X-OpenRouter-Title are accepted
+                // by OpenRouter; send both so the app name shows up regardless of version.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("X-Title", title);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("X-OpenRouter-Title", title);
             }
+
+            // App classification for the OpenRouter Rankings board.
+            string? categories = Environment.GetEnvironmentVariable("PROVIDER_OPENROUTER_CATEGORIES");
+            if (!string.IsNullOrWhiteSpace(categories))
+            {
+                client.DefaultRequestHeaders.TryAddWithoutValidation("X-OpenRouter-Categories", categories);
+            }
+
+            // Opt into provider routing + latency metadata in the response.
+            client.DefaultRequestHeaders.TryAddWithoutValidation("X-OpenRouter-Metadata", "enabled");
         }
 
         return client;

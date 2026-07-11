@@ -28,11 +28,26 @@ public sealed class ProxyFixture : IDisposable
         }
         """;
 
+    private const string FakeCompletionWithUnknownFinishReason = """
+        {
+          "id": "test-id", "object": "chat.completion", "created": 1700000000,
+          "model": "test-model",
+          "choices": [{"index":0,"message":{"role":"assistant","content":"hi from stub"},"finish_reason":"error"}]
+        }
+        """;
+
     // Fake SSE stream (OpenAI format) — proxy converts this to Ollama NDJSON
     private const string FakeStream =
         "data: {\"id\":\"t\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n" +
         "data: {\"id\":\"t\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
         "data: [DONE]\n\n";
+
+    private const string FakeStreamWithUnknownFinishReason =
+        "data: {\"id\":\"t\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"},\"finish_reason\":\"error\"}]}\n\n" +
+        "data: [DONE]\n\n";
+
+    private const string FakeStreamWithErrorEvent =
+        "data: {\"error\":{\"message\":\"upstream model failed\",\"code\":\"model_error\"}}\n\n";
 
     private const string FakeModels = """
         {"object":"list","data":[{"id":"test-model","object":"model","created":1700000000,"owned_by":"test"}]}
@@ -64,7 +79,12 @@ public sealed class ProxyFixture : IDisposable
 
             ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = stream ? "text/event-stream" : "application/json";
-            await ctx.Response.WriteAsync(stream ? FakeStream : FakeCompletion);
+            bool unknownFinishReason = body.Contains("unknown-finish-reason");
+            bool upstreamError = body.Contains("upstream-error");
+            await ctx.Response.WriteAsync(stream
+                ? upstreamError ? FakeStreamWithErrorEvent
+                : unknownFinishReason ? FakeStreamWithUnknownFinishReason : FakeStream
+                : unknownFinishReason ? FakeCompletionWithUnknownFinishReason : FakeCompletion);
         });
 
         _stub.StartAsync().GetAwaiter().GetResult();
@@ -266,6 +286,53 @@ public class EndpointTests(ProxyFixture fixture)
         string resp = await r.Content.ReadAsStringAsync();
         using JsonDocument d = JsonDocument.Parse(resp);
         Assert.True(d.RootElement.TryGetProperty("choices", out _));
+    }
+
+    [Fact]
+    public async Task V1Chat_NonStreaming_NormalizesUnknownFinishReason()
+    {
+        using StringContent body = new(
+            "{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"unknown-finish-reason\"}],\"stream\":false}",
+            System.Text.Encoding.UTF8, "application/json");
+
+        HttpResponseMessage r = await _client.PostAsync("/v1/chat/completions", body);
+        string response = await r.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        Assert.DoesNotContain("\"finish_reason\":\"error\"", response);
+        Assert.Contains("\"finish_reason\":\"stop\"", response);
+    }
+
+    [Fact]
+    public async Task V1Chat_Streaming_ConvertsUpstreamErrorEvent()
+    {
+        using StringContent body = new(
+            "{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"upstream-error\"}],\"stream\":true}",
+            System.Text.Encoding.UTF8, "application/json");
+
+        HttpResponseMessage r = await _client.PostAsync("/v1/chat/completions", body);
+        string response = await r.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        Assert.Contains("upstream model failed", response);
+        Assert.Contains("upstream_error", response);
+        Assert.Contains("data: [DONE]", response);
+        Assert.DoesNotContain("\"choices\"", response);
+    }
+
+    [Fact]
+    public async Task V1Chat_Streaming_NormalizesUnknownFinishReason()
+    {
+        using StringContent body = new(
+            "{\"model\":\"test-model\",\"messages\":[{\"role\":\"user\",\"content\":\"unknown-finish-reason\"}],\"stream\":true}",
+            System.Text.Encoding.UTF8, "application/json");
+
+        HttpResponseMessage r = await _client.PostAsync("/v1/chat/completions", body);
+        string response = await r.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        Assert.DoesNotContain("\"finish_reason\":\"error\"", response);
+        Assert.Contains("\"finish_reason\":\"stop\"", response);
     }
 
     // /api/chat ───────────────────────────────────────────────────────────────

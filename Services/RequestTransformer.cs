@@ -18,18 +18,13 @@ internal sealed class RequestTransformer
     {
         ModelExecutionConfig exec = _modelCatalogService.GetExecutionConfigForModel(model);
 
+        // OpenRouter prompt caching only applies to Claude models; decide once up front
+        // so we can inject the breakpoint inside the single streaming pass below.
+        bool needCache_control = NeedCache_control(model);
+
         // 防御性滑动窗口裁剪：当历史上下文 + 当前请求的 Token 总量超过模型上下文窗口时，
         // 从最旧的非系统消息开始删除，始终保留系统消息，并为输出预留空间。
         rawBody = PruneToContextWindow(rawBody, exec);
-
-        bool hasAnyDefault = exec.Temperature.HasValue
-            || exec.TopP.HasValue
-            || exec.MaxTokensPreferred.HasValue
-            || !string.IsNullOrWhiteSpace(exec.ReasoningEffort);
-        if (!hasAnyDefault)
-        {
-            return rawBody;
-        }
 
         // Parameter support is driven by the provider's declared capabilities.
         // For unknown providers (default capabilities), all feature flags are false
@@ -56,10 +51,9 @@ internal sealed class RequestTransformer
         // client-supplied field instead of only injecting defaults.
         bool force = exec.OverrideClientParams;
 
-        // Context-aware budget: estimate input tokens, then cap max_tokens so
-        // that input + output never exceeds the model's context window.
-        // This prevents 400 errors from upstream when long conversations
-        // reduce the available token budget.
+        // Context-aware budget: compute after pruning so the estimation always
+        // uses the already-trimmed body. Capped at 1 to guarantee a non-zero
+        // output budget, preventing corner-case clamping to 0 max_tokens.
         int? maxTokensByContext = null;
         if (exec.ContextLength.HasValue)
         {
@@ -91,6 +85,7 @@ internal sealed class RequestTransformer
             bool hasTopP = false;
             bool hasMaxTokens = false;
             bool hasReasoningEffort = false;
+            bool hasCacheControl = false;
 
             foreach (JsonProperty prop in root.EnumerateObject())
             {
@@ -167,6 +162,12 @@ internal sealed class RequestTransformer
                     // Skip top_k for providers that don't support it
                     continue;
                 }
+                else if (prop.NameEquals("cache_control"))
+                {
+                    // Preserve any explicit top-level breakpoint the client already set.
+                    prop.WriteTo(writer);
+                    hasCacheControl = true;
+                }
                 else
                 {
                     prop.WriteTo(writer);
@@ -198,10 +199,27 @@ internal sealed class RequestTransformer
                 writer.WriteEndObject();
             }
 
+            // OpenRouter prompt caching: for Claude models, inject a top-level
+            // "cache_control" breakpoint (ttl "1h") to unlock the discounted prompt-cache
+            // window. Done in this same pass so the body is scanned/written only once.
+            // The "messages[].content" array is never touched, so explicit breakpoints the
+            // client set there are preserved. Skip if the client already supplied one.
+            if (needCache_control && !hasCacheControl)
+            {
+                writer.WriteStartObject("cache_control");
+                writer.WriteString("type", "ephemeral");
+                //writer.WriteString("ttl", "1h");
+                writer.WriteEndObject();
+            }
+
             writer.WriteEndObject();
             writer.Flush();
 
-            return Encoding.UTF8.GetString(ms.ToArray());
+            return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch
         {
@@ -210,7 +228,7 @@ internal sealed class RequestTransformer
     }
 
     /// <summary>
-    /// Estimates the number of input tokens from the raw request body using the
+    /// Estimates the number of input tokens
     /// precise tokenizer. Falls back to a conservative heuristic on failure.
     /// </summary>
     private int EstimateInputTokens(string rawBody)
@@ -222,9 +240,12 @@ internal sealed class RequestTransformer
     /// 防御性滑动窗口裁剪：当请求的总输入 Token 数（含 messages、tools、system 等）
     /// 超过模型上下文窗口时，从最旧的非系统消息开始删除，始终保留系统消息，
     /// 并为输出预留 <paramref name="exec"/> 中声明的 max_tokens 预算。
-    /// 若裁剪后仍然超限，则继续删除非系统消息，直至满足约束或仅剩系统消息。
+    /// 受保护块（所有 system 消息、首个 user 消息）永不裁剪，以稳定 OpenRouter
+    /// 的提示词缓存哈希；带 tool_calls 的 assistant 消息与其 tool 响应作为原子块
+    /// 整体保留或删除，避免 tool_call 与 tool 响应失配。若裁剪后仍然超限，则继续
+    /// 删除非系统消息，直至满足约束或仅剩受保护块。
     /// </summary>
-    private string PruneToContextWindow(string rawBody, ModelExecutionConfig exec)
+    internal string PruneToContextWindow(string rawBody, ModelExecutionConfig exec)
     {
         if (!exec.ContextLength.HasValue)
         {
@@ -246,36 +267,81 @@ internal sealed class RequestTransformer
             }
 
             // 计算当前总 Token 数（messages + 其它顶层字段）。
-            int totalTokens = CountNonMessageTokens(root, messages);
+            int totalTokens = _tokenizerService.CountNonMessageTokens(root, messages);
             List<JsonElement> msgList = [];
             foreach (JsonElement m in messages.EnumerateArray())
             {
                 msgList.Add(m);
             }
 
-            // 分离系统消息（始终保留）与非系统消息（可裁剪）。
-            List<JsonElement> systemMessages = [];
-            List<JsonElement> prunable = [];
-            foreach (JsonElement m in msgList)
+            // 将消息分组为「裁剪块」：普通消息各自成块；带 tool_calls 的 assistant 消息
+            // 与其紧随其后的 tool 响应合并为一个原子块，避免只删一半导致 tool_call 与
+            // tool 响应失配（上游 API 会拒绝此类非法对话）。
+            List<(List<JsonElement> Block, bool IsToolExchange)> blocks = [];
+            for (int bi = 0; bi < msgList.Count; bi++)
             {
+                JsonElement m = msgList[bi];
                 string? role = m.TryGetProperty("role", out JsonElement r) ? r.GetString() : null;
-                if (string.Equals(role, "system", StringComparison.OrdinalIgnoreCase))
+
+                if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase)
+                    && m.TryGetProperty("tool_calls", out JsonElement tc)
+                    && tc.ValueKind == JsonValueKind.Array && tc.GetArrayLength() > 0)
                 {
-                    systemMessages.Add(m);
+                    List<JsonElement> block = [m];
+                    int j = bi + 1;
+                    while (j < msgList.Count)
+                    {
+                        JsonElement nx = msgList[j];
+                        string? nxRole = nx.TryGetProperty("role", out JsonElement nr) ? nr.GetString() : null;
+                        if (string.Equals(nxRole, "tool", StringComparison.OrdinalIgnoreCase))
+                        {
+                            block.Add(nx);
+                            j++;
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                    blocks.Add((block, true));
+                    bi = j - 1; // 跳过已合并的 tool 响应，避免重复成块
                 }
                 else
                 {
-                    prunable.Add(m);
+                    blocks.Add(([m], false));
                 }
             }
 
-            foreach (JsonElement m in systemMessages)
+            // 钉死 OpenRouter 缓存哈希依赖的首个 system 与首个 user 消息所在块，永不裁剪。
+            // 其余 system 块同样受保护（沿用「始终保留系统消息」的既有策略）。
+            int pinnedUserBlock = -1;
+            for (int k = 0; k < blocks.Count; k++)
             {
-                totalTokens += _tokenizerService.CountMessageTokens(m);
+                foreach (JsonElement m in blocks[k].Block)
+                {
+                    string? r2 = m.TryGetProperty("role", out JsonElement rr) ? rr.GetString() : null;
+                    if (pinnedUserBlock < 0 && string.Equals(r2, "user", StringComparison.OrdinalIgnoreCase))
+                    {
+                        pinnedUserBlock = k;
+                    }
+                }
+                if (pinnedUserBlock >= 0)
+                {
+                    break;
+                }
             }
-            foreach (JsonElement m in prunable)
+
+            // 计算每块 token 数并累加至总量。
+            List<int> blockTokens = new(blocks.Count);
+            foreach (var (block, _) in blocks)
             {
-                totalTokens += _tokenizerService.CountMessageTokens(m);
+                int t = 0;
+                foreach (JsonElement m in block)
+                {
+                    t += _tokenizerService.CountMessageTokens(m);
+                }
+                blockTokens.Add(t);
+                totalTokens += t;
             }
 
             if (totalTokens <= inputBudget)
@@ -283,16 +349,42 @@ internal sealed class RequestTransformer
                 return rawBody;
             }
 
-            // 从最旧的非系统消息开始删除（prunable 列表按原始顺序排列）。
-            int i = 0;
-            while (totalTokens > inputBudget && i < prunable.Count)
+            // 从最旧的块开始删除：跳过受保护块（所有 system 块 + 首个 user 块），
+            // 且 tool 交换块整体删除，保证 tool_call 与 tool 响应配对完整。
+            bool[] removed = new bool[blocks.Count];
+            for (int k = 0; k < blocks.Count && totalTokens > inputBudget; k++)
             {
-                totalTokens -= _tokenizerService.CountMessageTokens(prunable[i]);
-                prunable.RemoveAt(i);
+                bool isSystem = blocks[k].Block.Any(m =>
+                    m.TryGetProperty("role", out JsonElement r3) && string.Equals(r3.GetString(), "system", StringComparison.OrdinalIgnoreCase));
+                if (isSystem || k == pinnedUserBlock)
+                {
+                    continue;
+                }
+                totalTokens -= blockTokens[k];
+                removed[k] = true;
             }
 
-            // 重建消息数组：系统消息在前，保留的非系统消息在后。
-            List<JsonElement> finalMessages = [.. systemMessages, .. prunable];
+            // 防穿透熔断：即使删除所有非系统消息后仍然超限，说明 tools、response_format
+            // 或系统消息本身已超出模型上下文窗口。比较对象使用完整的 contextLength
+            // （而非 inputBudget，因为 inputBudget 在 max_output_tokens == context_length
+            // 时可能低至 1），确保只在真正无药可救时熔断。
+            if (totalTokens > contextLength)
+            {
+                throw new InvalidOperationException(
+                    $"Request exceeds context window ({contextLength}) after removing all non-system messages. " +
+                    "The system message and/or tool/response_format definitions alone exceed the available budget.");
+            }
+
+            // 重建消息数组：按原始顺序保留未被裁剪的块（块内消息顺序不变）。
+            List<JsonElement> finalMessages = [];
+            for (int k = 0; k < blocks.Count; k++)
+            {
+                if (removed[k])
+                {
+                    continue;
+                }
+                finalMessages.AddRange(blocks[k].Block);
+            }
 
             using MemoryStream ms = new();
             using Utf8JsonWriter writer = new(ms);
@@ -315,29 +407,16 @@ internal sealed class RequestTransformer
             writer.WriteEndObject();
             writer.Flush();
 
-            return Encoding.UTF8.GetString(ms.ToArray());
+            return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch
         {
             return rawBody;
         }
-    }
-
-    /// <summary>
-    /// 计算请求中除 messages 数组以外的顶层字段（如 tools、system 字符串等）的 Token 数。
-    /// </summary>
-    private int CountNonMessageTokens(JsonElement root, JsonElement messages)
-    {
-        int total = 0;
-        foreach (JsonProperty prop in root.EnumerateObject())
-        {
-            if (prop.NameEquals("messages"))
-            {
-                continue;
-            }
-            total += _tokenizerService.CountTokens(prop.Value.GetRawText());
-        }
-        return total;
     }
 
     internal string ReplaceModelInRequestBody(string rawBody, string upstreamModel)
@@ -372,7 +451,7 @@ internal sealed class RequestTransformer
             writer.WriteEndObject();
             writer.Flush();
 
-            return Encoding.UTF8.GetString(ms.ToArray());
+            return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
         }
         catch
         {
@@ -465,7 +544,7 @@ internal sealed class RequestTransformer
         w.WriteEndObject();
         w.Flush();
 
-        return modified ? Encoding.UTF8.GetString(ms.ToArray()) : null;
+        return modified ? Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length) : null;
     }
 
     private static bool IsAssistantContentEmpty(JsonElement msg)
@@ -482,4 +561,6 @@ internal sealed class RequestTransformer
             _ => false
         };
     }
+
+    private static bool NeedCache_control(string model) =>new[] { "anthropic/claude", "qwen/qwen" }.Any(prefix => model.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 }

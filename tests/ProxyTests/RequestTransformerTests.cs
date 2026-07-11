@@ -479,6 +479,123 @@ public class RequestTransformerTests
         Assert.False(doc.RootElement.TryGetProperty("reasoning_effort", out _));
     }
 
+    [Fact]
+    public void PruneToContextWindow_PinsFirstSystemAndFirstUserMessage()
+    {
+        // 上下文窗口仅能容纳钉死的首个 system + 首个 user（修正后的结构化估算约 110 token），
+        // 其余消息用超长文本确保必然触发裁剪。
+        RequestTransformer sut = CreateTransformer();
+        ModelExecutionConfig exec = new(ContextLength: 150, MaxOutputTokens: 20);
+        string huge = new string('x', 5000);
+        string raw = $$"""
+            {
+              "messages": [
+                { "role": "system", "content": "system instructions" },
+                { "role": "user", "content": "first user prompt" },
+                { "role": "user", "content": "{{huge}}" }
+              ]
+            }
+            """;
+
+        string result = sut.PruneToContextWindow(raw, exec);
+
+        using JsonDocument doc = JsonDocument.Parse(result);
+        JsonElement messages = doc.RootElement.GetProperty("messages");
+        Assert.Equal(2, messages.GetArrayLength());
+        Assert.Equal("system", messages[0].GetProperty("role").GetString());
+        Assert.Equal("user", messages[1].GetProperty("role").GetString());
+        Assert.Equal("first user prompt", messages[1].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public void PruneToContextWindow_KeepsToolExchangeAtomic()
+    {
+        RequestTransformer sut = CreateTransformer();
+        ModelExecutionConfig exec = new(ContextLength: 150, MaxOutputTokens: 20);
+        string huge = new string('x', 5000);
+        string raw = $$"""
+            {
+              "messages": [
+                { "role": "system", "content": "system instructions" },
+                { "role": "user", "content": "first user prompt" },
+                {
+                  "role": "assistant",
+                  "content": "",
+                  "tool_calls": [ { "id": "c1", "type": "function", "function": { "name": "f", "arguments": "{}" } } ]
+                },
+                { "role": "tool", "content": "{{huge}}", "tool_call_id": "c1" },
+                { "role": "user", "content": "final user prompt" }
+              ]
+            }
+            """;
+
+        string result = sut.PruneToContextWindow(raw, exec);
+
+        using JsonDocument doc = JsonDocument.Parse(result);
+        JsonElement messages = doc.RootElement.GetProperty("messages");
+        // 仅钉死的首个 system + 首个 user 保留；assistant+tool 块整体被移除。
+        Assert.Equal(2, messages.GetArrayLength());
+        Assert.Equal("system", messages[0].GetProperty("role").GetString());
+        Assert.Equal("first user prompt", messages[1].GetProperty("content").GetString());
+        AssertToolExchangeInvariant(messages);
+    }
+
+    [Fact]
+    public void PruneToContextWindow_DoesNotSplitToolExchange()
+    {
+        // 仅保留首个 system + 首个 user 仍超限时，必须整块删除 tool 交换，
+        // 不允许只删 assistant 或只删 tool 导致单边残留。
+        RequestTransformer sut = CreateTransformer();
+        ModelExecutionConfig exec = new(ContextLength: 150, MaxOutputTokens: 20);
+        string huge = new string('x', 5000);
+        string raw = $$"""
+            {
+              "messages": [
+                { "role": "system", "content": "system instructions" },
+                { "role": "user", "content": "first user prompt" },
+                {
+                  "role": "assistant",
+                  "content": "",
+                  "tool_calls": [ { "id": "c1", "type": "function", "function": { "name": "f", "arguments": "{}" } } ]
+                },
+                { "role": "tool", "content": "{{huge}}", "tool_call_id": "c1" }
+              ]
+            }
+            """;
+
+        string result = sut.PruneToContextWindow(raw, exec);
+
+        using JsonDocument doc = JsonDocument.Parse(result);
+        JsonElement messages = doc.RootElement.GetProperty("messages");
+        Assert.Equal(2, messages.GetArrayLength());
+        AssertToolExchangeInvariant(messages);
+    }
+
+    /// <summary>
+    /// 校验裁剪后的消息列表不存在 tool_call 与 tool 响应失配的非法对话。
+    /// </summary>
+    private static void AssertToolExchangeInvariant(JsonElement messages)
+    {
+        bool hasAssistantWithToolCalls = false;
+        bool hasTool = false;
+        foreach (JsonElement m in messages.EnumerateArray())
+        {
+            string? role = m.TryGetProperty("role", out JsonElement r) ? r.GetString() : null;
+            if (string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase)
+                && m.TryGetProperty("tool_calls", out JsonElement tc)
+                && tc.ValueKind == JsonValueKind.Array && tc.GetArrayLength() > 0)
+            {
+                hasAssistantWithToolCalls = true;
+            }
+            if (string.Equals(role, "tool", StringComparison.OrdinalIgnoreCase))
+            {
+                hasTool = true;
+            }
+        }
+        // 两者必须同时出现或同时消失，不允许单边残留。
+        Assert.Equal(hasAssistantWithToolCalls, hasTool);
+    }
+
     private static RequestTransformer CreateTransformer()
     {
         return CreateTransformer(out _);
