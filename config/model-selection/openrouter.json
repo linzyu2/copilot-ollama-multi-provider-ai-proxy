@@ -3,7 +3,7 @@
   "models": [
     {
       "match": "anthropic/claude-haiku-4.5",
-      "priority": 1,
+      "priority": 9,
       "enabled": false,
       "execution": {
         "context_length": 200000,
@@ -18,7 +18,7 @@
     },
     {
       "match": "anthropic/claude-sonnet-5",
-      "priority": 2,
+      "priority": 4,
       "enabled": true,
       "execution": {
         "context_length": 1000000,
@@ -33,7 +33,7 @@
     },
     {
       "match": "deepseek/deepseek-v4-flash",
-      "priority": 3,
+      "priority": 1,
       "enabled": true,
       "execution": {
         "context_length": 1048576,
@@ -48,7 +48,7 @@
     },
     {
       "match": "deepseek/deepseek-v4-pro",
-      "priority": 4,
+      "priority": 2,
       "enabled": true,
       "execution": {
         "context_length": 1048576,
@@ -63,7 +63,7 @@
     },
     {
       "match": "google/gemini-3.5-flash",
-      "priority": 5,
+      "priority": 2,
       "enabled": true,
       "execution": {
         "context_length": 1048576,
@@ -80,7 +80,7 @@
     },
     {
       "match": "moonshotai/kimi-k2.7-code",
-      "priority": 6,
+      "priority": 5,
       "enabled": false,
       "execution": {
         "context_length": 262144,
@@ -113,7 +113,7 @@
     },
     {
       "match": "nvidia/nemotron-3-ultra-550b-a55b:free",
-      "priority": 8,
+      "priority": 7,
       "enabled": true,
       "execution": {
         "context_length": 262144,
@@ -129,23 +129,8 @@
       }
     },
     {
-      "match": "openai/gpt-5.4",
-      "priority": 9,
-      "enabled": false,
-      "execution": {
-        "context_length": 1050000,
-        "max_output_tokens": 128000,
-        "supports_tools": true,
-        "supports_vision": true,
-        "family": "openai",
-        "temperature": 0.3,
-        "max_tokens": 128000,
-        "timeout_seconds": 180
-      }
-    },
-    {
-      "match": "openai/gpt-5.5",
-      "priority": 10,
+      "match": "openai/gpt-5.6-terra",
+      "priority": 3,
       "enabled": true,
       "execution": {
         "context_length": 1050000,
@@ -155,12 +140,29 @@
         "family": "openai",
         "temperature": 0.3,
         "max_tokens": 128000,
+        "reasoning_effort": "medium",
         "timeout_seconds": 240
       }
     },
     {
+      "match": "openai/gpt-5.6-luna",
+      "priority": 3,
+      "enabled": true,
+      "execution": {
+        "context_length": 1050000,
+        "max_output_tokens": 128000,
+        "supports_tools": true,
+        "supports_vision": true,
+        "family": "openai",
+        "temperature": 0.3,
+        "max_tokens": 128000,
+        "reasoning_effort": "medium",
+        "timeout_seconds": 180
+      }
+    },
+    {
       "match": "qwen/qwen3.7-plus",
-      "priority": 12,
+      "priority": 1,
       "enabled": true,
       "execution": {
         "context_length": 1000000,
@@ -176,7 +178,7 @@
     },
     {
       "match": "tencent/hy3:free",
-      "priority": 13,
+      "priority": 8,
       "enabled": true,
       "execution": {
         "context_length": 262144,

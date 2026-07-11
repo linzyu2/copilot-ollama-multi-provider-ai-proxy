@@ -10,8 +10,15 @@ internal sealed class ChatStreamingService
         _reasoningCacheService = reasoningCacheService;
     }
 
-    internal async Task StreamAndCache(HttpResponseMessage upstream, HttpResponse downstream, CancellationToken ct)
+    internal async Task<int> StreamAndCache(
+        HttpResponseMessage upstream,
+        HttpResponse downstream,
+        CancellationToken ct,
+        string model = "unknown",
+        string provider = "unknown",
+        string requestId = "unknown")
     {
+        int completionTokens = 0;
         try
         {
             using Stream upstreamStream = await upstream.Content.ReadAsStreamAsync(ct);
@@ -50,6 +57,16 @@ internal sealed class ChatStreamingService
                         {
                             using JsonDocument chunk = JsonDocument.Parse(json);
                             JsonElement cr = chunk.RootElement;
+                            if (TryGetUpstreamError(cr, out string errorMessage, out string? errorCode))
+                            {
+                                Console.WriteLine(
+                                    $"[STREAM] upstream error provider={provider} model=\"{model}\" id={requestId} " +
+                                    $"code=\"{errorCode ?? "unknown"}\" message=\"{errorMessage}\"");
+                                await WriteOpenAiErrorAsync(downstream, errorMessage, errorCode, ct);
+                                break;
+                            }
+
+                            json = NormalizeFinishReason(json, cr);
                             if (cr.TryGetProperty("choices", out JsonElement choices) && choices.GetArrayLength() > 0)
                             {
                                 JsonElement delta = choices[0].TryGetProperty("delta", out JsonElement d) ? d
@@ -57,6 +74,12 @@ internal sealed class ChatStreamingService
 
                                 if (delta.ValueKind != JsonValueKind.Undefined)
                                 {
+                                    if (cr.TryGetProperty("usage", out JsonElement usage) && usage.ValueKind == JsonValueKind.Object)
+                                    {
+                                        if (usage.TryGetProperty("completion_tokens", out JsonElement ctE) && ctE.ValueKind == JsonValueKind.Number)
+                                            completionTokens = ctE.GetInt32();
+                                    }
+
                                     if (delta.TryGetProperty("reasoning_content", out JsonElement rc) && rc.ValueKind == JsonValueKind.String)
                                     {
                                         string? rct = rc.GetString();
@@ -103,7 +126,7 @@ internal sealed class ChatStreamingService
                         await writer.WriteAsync(json);
                         await writer.WriteLineAsync();
                     }
-                    else
+                    else if (json == "[DONE]")
                     {
                         await writer.WriteLineAsync(line);
                     }
@@ -123,7 +146,115 @@ internal sealed class ChatStreamingService
             // to a JSON error response. Simply end the stream — the client will
             // see an incomplete response and will retry automatically.
         }
+
+        return completionTokens;
     }
+
+    private static bool TryGetUpstreamError(JsonElement root, out string message, out string? code)
+    {
+        message = string.Empty;
+        code = null;
+
+        if (!root.TryGetProperty("error", out JsonElement error))
+            return false;
+
+        if (error.ValueKind == JsonValueKind.Object)
+        {
+            if (error.TryGetProperty("message", out JsonElement messageElement) &&
+                messageElement.ValueKind == JsonValueKind.String)
+            {
+                message = messageElement.GetString() ?? string.Empty;
+            }
+
+            if (error.TryGetProperty("code", out JsonElement codeElement))
+                code = codeElement.ToString();
+        }
+        else if (error.ValueKind == JsonValueKind.String)
+        {
+            message = error.GetString() ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(message))
+            message = "Upstream provider returned an error.";
+
+        return true;
+    }
+
+    private static async Task WriteOpenAiErrorAsync(
+        HttpResponse downstream,
+        string message,
+        string? code,
+        CancellationToken ct)
+    {
+        Dictionary<string, object?> error = new()
+        {
+            ["message"] = message,
+            ["type"] = "upstream_error",
+            ["code"] = code
+        };
+
+        await downstream.WriteAsync(
+            $"data: {JsonSerializer.Serialize(new { error }, JsonDefaults.SnakeCase)}\n\n", ct);
+        await downstream.WriteAsync("data: [DONE]\n\n", ct);
+    }
+
+    private static string NormalizeFinishReason(string json, JsonElement root)
+    {
+        if (!root.TryGetProperty("choices", out JsonElement choices) || choices.ValueKind != JsonValueKind.Array)
+            return json;
+
+        using MemoryStream buffer = new();
+        using (Utf8JsonWriter writer = new(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (JsonProperty property in root.EnumerateObject())
+            {
+                if (!property.NameEquals("choices"))
+                {
+                    property.WriteTo(writer);
+                    continue;
+                }
+
+                writer.WritePropertyName("choices");
+                writer.WriteStartArray();
+                foreach (JsonElement choice in choices.EnumerateArray())
+                {
+                    if (choice.ValueKind != JsonValueKind.Object ||
+                        !choice.TryGetProperty("finish_reason", out JsonElement finishReason) ||
+                        finishReason.ValueKind != JsonValueKind.String)
+                    {
+                        choice.WriteTo(writer);
+                        continue;
+                    }
+
+                    string? value = finishReason.GetString();
+                    if (IsOpenAiFinishReason(value))
+                    {
+                        choice.WriteTo(writer);
+                        continue;
+                    }
+
+                    Console.WriteLine($"[STREAM] normalized unsupported finish_reason=\"{value}\" to \"stop\"");
+                    writer.WriteStartObject();
+                    foreach (JsonProperty choiceProperty in choice.EnumerateObject())
+                    {
+                        if (choiceProperty.NameEquals("finish_reason"))
+                            writer.WriteString("finish_reason", "stop");
+                        else
+                            choiceProperty.WriteTo(writer);
+                    }
+                    writer.WriteEndObject();
+                }
+                writer.WriteEndArray();
+            }
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static bool IsOpenAiFinishReason(string? value)
+        => value is "stop" or "length" or "content_filter" or "tool_calls" or "function_call";
 
     internal async Task StreamNdjsonPassthrough(HttpResponseMessage upstream, HttpResponse downstream, CancellationToken ct)
     {

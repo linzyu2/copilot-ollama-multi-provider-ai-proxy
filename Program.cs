@@ -31,6 +31,10 @@ string? proxyApiKey = Environment.GetEnvironmentVariable("PROXY_API_KEY");
 
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
+// 精简 ASP.NET 自带的请求诊断日志（"info: Microsoft.AspNetCore.Hosting.Diagnostics ..."）。
+// 把该类别降到 Warning，只保留错误/警告，避免与代理自身的 [REQ]/[UPSTREAM]/[STREAM] 日志重复。
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+
 builder.Services.AddSingleton<ProviderHttpClientFactory>();
 builder.Services.AddSingleton<ProviderRegistry>();
 builder.Services.AddSingleton<ModelSelectionStore>();
